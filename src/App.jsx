@@ -123,15 +123,36 @@ const fallbackSpeak = (text, lang, onEnd) => {
     if (onEnd) onEnd();
     return;
   }
-  window.speechSynthesis.cancel(); // Dừng các luồng đang đọc
+  
+  // Hủy các luồng đang đọc để tránh kẹt
+  window.speechSynthesis.cancel(); 
+  
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = lang === 'en' ? 'en-US' : 'vi-VN';
   utterance.rate = 1.0;
-  if (onEnd) {
-    utterance.onend = onEnd;
-    utterance.onerror = onEnd; // Tiến hành tiếp game dù có lỗi
-  }
+  
+  // iOS Safari Fix: Sự kiện onend của Safari rất hay bị tịt (không fire). 
+  // Cần một biến cờ và timeout dự phòng để game không bị treo.
+  let isEnded = false;
+  const safeEnd = () => {
+    if (isEnded) return;
+    isEnded = true;
+    if (onEnd) onEnd();
+  };
+
+  utterance.onend = safeEnd;
+  utterance.onerror = safeEnd; 
+  
   window.speechSynthesis.speak(utterance);
+
+  // Set timeout dự phòng. Ước tính thời gian đọc: 150ms/ký tự + 2 giây an toàn
+  const estimatedTime = text.length * 150 + 2000;
+  setTimeout(() => {
+    if (!isEnded) {
+      console.warn("Fallback iOS Safari timeout triggered (onend failed to fire)");
+      safeEnd();
+    }
+  }, estimatedTime);
 };
 
 const App = () => {
@@ -186,7 +207,7 @@ const App = () => {
     }
 
     let retryCount = 0;
-    const maxRetries = 3; // Giảm số lần retry để tránh giam ứng dụng quá lâu khi bị rate limit
+    const maxRetries = 3; 
     let response;
 
     while (retryCount < maxRetries) {
@@ -211,7 +232,7 @@ const App = () => {
         }
       } catch (e) {
         console.error("Network/Fetch Error:", e);
-        if (e.message.includes("quota/permission")) throw e; // Dừng retry nếu là lỗi khóa key hoặc hết quota
+        if (e.message && e.message.includes("quota/permission")) throw e; 
       }
       retryCount++;
       await new Promise(res => setTimeout(res, Math.pow(2, retryCount) * 1000));
@@ -246,7 +267,6 @@ const App = () => {
       const url = await fetchTTS(fullText, true);
       audioCacheRef.current[index] = url;
 
-      // Cố tình delay 1 chút trước khi tải đáp án để tránh dồn Request (Tránh 429 Error)
       await new Promise(res => setTimeout(res, 1000));
 
       const correctAns = qData[index].answer.trim().toUpperCase();
@@ -333,8 +353,16 @@ const App = () => {
 
   const loadQuestions = async () => {
     try {
+      // Mở khóa Audio API truyền thống
       const ctx = getAudioCtx();
       if (ctx.state === 'suspended') await ctx.resume();
+      
+      // Mở khóa SpeechSynthesis cho iOS Safari (Phải có thao tác User Interaction)
+      if ('speechSynthesis' in window) {
+        const initSpeech = new SpeechSynthesisUtterance('');
+        initSpeech.volume = 0; // Đọc im lặng để xin quyền
+        window.speechSynthesis.speak(initSpeech);
+      }
     } catch(e) {}
 
     if (!csvUrl) {
@@ -482,7 +510,7 @@ const App = () => {
         await new Promise(resolve => {
           audioRef.current.src = revealUrl;
           audioRef.current.onended = resolve;
-          audioRef.current.onerror = resolve; // Tiếp tục tiến trình nếu play lỗi
+          audioRef.current.onerror = resolve; 
           audioRef.current.play().catch(resolve);
         });
       } else {
