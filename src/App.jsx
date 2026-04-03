@@ -162,6 +162,7 @@ const App = () => {
   const [csvUrl, setCsvUrl] = useState('https://docs.google.com/spreadsheets/d/1qMTFOHUOuK-J1gnS4sCmsh-N7A8ucgWKc0opDNPhdqE/edit?gid=0#gid=0');
   const [error, setError] = useState(null);
   const [playerName, setPlayerName] = useState('Mỹ An'); 
+  const [questionCount, setQuestionCount] = useState(10);
   
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [hasRead, setHasRead] = useState(false);
@@ -172,7 +173,6 @@ const App = () => {
   const audioRef = useRef(null);
   const audioCacheRef = useRef({}); 
 
-  // Xây dựng nội dung kịch bản đọc đầy đủ (để dùng chung cho cả Gemini và Fallback)
   const getQuestionScript = (q) => {
     if (!q) return "";
     const lang = detectLang(q.question);
@@ -193,7 +193,6 @@ const App = () => {
     const lang = detectLang(text);
     const voiceName = lang === 'en' ? "Kore" : "Aoede";
     
-    // Prompt của Gemini sẽ chỉ yêu cầu nói đúng văn bản script đã được chuẩn bị
     const prompt = isQuestion
       ? (lang === 'en' 
           ? `Speak in an American female voice exactly as follows: ${text}`
@@ -215,7 +214,10 @@ const App = () => {
       })
     });
 
-    if (!response.ok) throw new Error("TTS fetch failed");
+    if (!response.ok) {
+      if (response.status === 429) console.warn("Gemini API rate limit reached. Using fallback.");
+      throw new Error(`TTS fetch failed with status ${response.status}`);
+    }
 
     const result = await response.json();
     const pcmBase64 = result.candidates[0].content.parts[0].inlineData.data;
@@ -242,7 +244,8 @@ const App = () => {
       const url = await fetchTTS(script, true);
       audioCacheRef.current[index] = url;
 
-      await new Promise(res => setTimeout(res, 800));
+      // Giãn cách thời gian preload để tránh spam API
+      await new Promise(res => setTimeout(res, 1200));
 
       const correctAns = qData[index].answer.trim().toUpperCase();
       const correctText = qData[index][correctAns.toLowerCase()];
@@ -253,7 +256,6 @@ const App = () => {
       const revealUrl = await fetchTTS(revealText, false);
       audioCacheRef.current[`reveal_${index}`] = revealUrl;
     } catch (e) {
-      console.warn(`Preload skipped for ${index}`, e);
       audioCacheRef.current[index] = 'FALLBACK';
       audioCacheRef.current[`reveal_${index}`] = 'FALLBACK';
     }
@@ -325,7 +327,6 @@ const App = () => {
       getAudioCtx();
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
-        // Mồi cho iOS nạp voices sớm
         window.speechSynthesis.getVoices(); 
         const init = new SpeechSynthesisUtterance(' ');
         init.volume = 0;
@@ -370,9 +371,11 @@ const App = () => {
         };
       });
 
+      const finalQuestions = data.slice(0, questionCount);
+
       audioCacheRef.current = {};
-      await preloadQuestion(0, data);
-      setQuestions(data);
+      await preloadQuestion(0, finalQuestions);
+      setQuestions(finalQuestions);
       setGameState('playing');
       setCurrentIdx(0);
       setScore(0);
@@ -441,7 +444,6 @@ const App = () => {
       
       if (revealUrl && revealUrl !== 'FALLBACK' && audioRef.current) {
         await new Promise(res => {
-          // FIX LỖI TYPO: Phải là revealUrl chứ không phải url
           audioRef.current.src = revealUrl;
           audioRef.current.onended = res;
           audioRef.current.onerror = res;
@@ -504,20 +506,69 @@ const App = () => {
         <div className="bg-amber-400 p-6 flex justify-between items-center text-white">
           <div className="flex items-center gap-3">
             <Trophy className="w-8 h-8" />
-            <h1 className="text-2xl font-black uppercase">Rung Chuông Vàng</h1>
+            <h1 className="text-2xl font-black uppercase tracking-tighter">Rung Chuông Vàng</h1>
           </div>
           {gameState === 'playing' && <div className="text-right text-xs font-bold">Câu: {currentIdx + 1}/{questions.length}<br/>Điểm: {score}</div>}
         </div>
 
         <div className="p-6">
           {gameState === 'config' && (
-            <div className="space-y-6 text-center">
+            <div className="space-y-6 text-center animate-in fade-in zoom-in duration-300">
               <FileText className="mx-auto text-amber-500 w-16 h-16" />
               <h2 className="text-xl font-bold">Cấu hình ván chơi</h2>
-              <input type="text" value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="Tên bé..." className="w-full p-4 rounded-xl border-2 outline-none focus:border-amber-400" />
-              <input type="text" value={csvUrl} onChange={e => setCsvUrl(e.target.value)} placeholder="Link Google Drive..." className="w-full p-4 rounded-xl border-2 outline-none focus:border-amber-400" />
-              {error && <p className="text-red-500 text-sm italic">{error}</p>}
-              <button onClick={loadQuestions} className="w-full bg-amber-500 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 transition-all">Bắt đầu ngay</button>
+              
+              <div className="text-left space-y-2">
+                <label className="text-sm font-semibold text-slate-500 ml-1">Tên người chơi</label>
+                <input 
+                  type="text" 
+                  value={playerName} 
+                  onChange={e => setPlayerName(e.target.value)} 
+                  placeholder="Tên bé..." 
+                  className="w-full p-4 rounded-xl border-2 outline-none focus:border-amber-400 transition-all" 
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="text-left space-y-2">
+                  <label className="text-sm font-semibold text-slate-500 ml-1">Số câu hỏi</label>
+                  <input 
+                    type="number" 
+                    min="1" 
+                    max="100"
+                    value={questionCount} 
+                    onChange={e => setQuestionCount(Math.max(1, parseInt(e.target.value) || 1))} 
+                    className="w-full p-4 rounded-xl border-2 outline-none focus:border-amber-400 transition-all" 
+                  />
+                </div>
+                <div className="text-left space-y-2">
+                   <label className="text-sm font-semibold text-slate-500 ml-1">Thời gian (s)</label>
+                   <div className="w-full p-4 rounded-xl border-2 bg-slate-50 text-slate-400 font-bold text-center">10s</div>
+                </div>
+              </div>
+
+              <div className="text-left space-y-2">
+                <label className="text-sm font-semibold text-slate-500 ml-1">Link Google Drive CSV</label>
+                <input 
+                  type="text" 
+                  value={csvUrl} 
+                  onChange={e => setCsvUrl(e.target.value)} 
+                  placeholder="Link Google Drive..." 
+                  className="w-full p-4 rounded-xl border-2 outline-none focus:border-amber-400 transition-all" 
+                />
+              </div>
+
+              {error && (
+                <div className="bg-red-50 text-red-500 p-4 rounded-xl flex items-center gap-3 text-sm border border-red-100">
+                  <AlertCircle size={20} /> {error}
+                </div>
+              )}
+
+              <button 
+                onClick={loadQuestions} 
+                className="w-full bg-amber-500 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 transition-all hover:bg-amber-600"
+              >
+                Bắt đầu ngay
+              </button>
             </div>
           )}
 
@@ -530,7 +581,7 @@ const App = () => {
               </div>
               <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 flex justify-between items-start gap-4">
                 <h3 className="text-xl font-bold leading-tight">{questions[currentIdx]?.question}</h3>
-                <button onClick={() => playQuestionAudio(currentIdx)} disabled={isSpeaking || isRevealing} className={`p-3 rounded-full ${isSpeaking ? 'bg-amber-100 text-amber-400' : 'bg-amber-500 text-white'}`}><Volume2 /></button>
+                <button onClick={() => playQuestionAudio(currentIdx)} disabled={isSpeaking || isRevealing} className={`p-3 rounded-full ${isSpeaking ? 'bg-amber-100 text-amber-400' : 'bg-amber-500 text-white shadow-md'}`}><Volume2 /></button>
               </div>
               <div className="grid gap-3">
                 {['A', 'B', 'C'].map(label => (
@@ -547,7 +598,7 @@ const App = () => {
           {(gameState === 'gameover' || gameState === 'win') && (
             <div className="py-10 text-center space-y-6">
               <div className="text-6xl">{gameState === 'win' ? '🎊' : '🔔'}</div>
-              <h2 className="text-3xl font-black uppercase">{gameState === 'win' ? 'Chiến thắng!' : 'Dừng chân rồi!'}</h2>
+              <h2 className="text-3xl font-black uppercase tracking-tighter">{gameState === 'win' ? 'Chiến thắng!' : 'Dừng chân rồi!'}</h2>
               <div className="text-5xl font-black text-amber-500">{score} điểm</div>
               <button onClick={resetGame} className="bg-amber-500 text-white font-bold px-10 py-4 rounded-2xl shadow-lg active:scale-95 transition-all">Chơi ván mới</button>
             </div>
