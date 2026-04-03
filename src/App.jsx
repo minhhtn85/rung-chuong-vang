@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, RotateCcw, Volume2, AlertCircle, Trophy, Clock, FileText, ChevronRight, CheckCircle2, XCircle } from 'lucide-react';
 
-const apiKey = "AIzaSyBBufLpYn9kZL0B-e9I7llsM4iu1Rre4Aw"; // Đã thêm API Key của anh
+// ĐỂ TRỐNG Ở ĐÂY KHI CHẠY TRÊN CANVAS. 
+// LƯU Ý BẢO MẬT: Khi deploy lên Vercel, TUYỆT ĐỐI KHÔNG commit key thẳng vào file này lên Github.
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 // --- UTILS: CSV Parser ---
 const parseCSV = (text) => {
@@ -115,6 +117,23 @@ const SoundEngine = {
   }
 };
 
+// --- UTILS: Fallback TTS (Offline Web Speech API) ---
+const fallbackSpeak = (text, lang, onEnd) => {
+  if (!('speechSynthesis' in window)) {
+    if (onEnd) onEnd();
+    return;
+  }
+  window.speechSynthesis.cancel(); // Dừng các luồng đang đọc
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = lang === 'en' ? 'en-US' : 'vi-VN';
+  utterance.rate = 1.0;
+  if (onEnd) {
+    utterance.onend = onEnd;
+    utterance.onerror = onEnd; // Tiến hành tiếp game dù có lỗi
+  }
+  window.speechSynthesis.speak(utterance);
+};
+
 const App = () => {
   const [gameState, setGameState] = useState('config'); // config, loading, playing, gameover, win
   const [questions, setQuestions] = useState([]);
@@ -123,7 +142,7 @@ const App = () => {
   const [timeLeft, setTimeLeft] = useState(10);
   const [csvUrl, setCsvUrl] = useState('https://docs.google.com/spreadsheets/d/1qMTFOHUOuK-J1gnS4sCmsh-N7A8ucgWKc0opDNPhdqE/edit?gid=0#gid=0');
   const [error, setError] = useState(null);
-  const [playerName, setPlayerName] = useState('Mỹ An'); // State mới lưu tên người chơi
+  const [playerName, setPlayerName] = useState('Mỹ An'); 
   
   // New States for logic updates
   const [isSpeaking, setIsSpeaking] = useState(false);
@@ -133,7 +152,7 @@ const App = () => {
   
   const timerRef = useRef(null);
   const audioRef = useRef(null);
-  const audioCacheRef = useRef({}); // Cache lưu trữ audio đã tải trước
+  const audioCacheRef = useRef({}); 
 
   // Helper để lấy chuỗi đọc bao gồm cả đáp án
   const getFullQuestionText = (q) => {
@@ -167,7 +186,7 @@ const App = () => {
     }
 
     let retryCount = 0;
-    const maxRetries = 5;
+    const maxRetries = 3; // Giảm số lần retry để tránh giam ứng dụng quá lâu khi bị rate limit
     let response;
 
     while (retryCount < maxRetries) {
@@ -180,16 +199,25 @@ const App = () => {
             generationConfig: {
               responseModalities: ["AUDIO"],
               speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
-            }
+            },
+            model: "gemini-2.5-flash-preview-tts"
           })
         });
         if (response.ok) break;
-      } catch (e) {}
+        const errText = await response.text();
+        console.error("API Error Details:", errText);
+        if (response.status === 403 || response.status === 429) {
+          throw new Error(`API quota/permission error: ${response.status}`);
+        }
+      } catch (e) {
+        console.error("Network/Fetch Error:", e);
+        if (e.message.includes("quota/permission")) throw e; // Dừng retry nếu là lỗi khóa key hoặc hết quota
+      }
       retryCount++;
       await new Promise(res => setTimeout(res, Math.pow(2, retryCount) * 1000));
     }
 
-    if (!response || !response.ok) throw new Error("TTS fetch failed");
+    if (!response || !response.ok) throw new Error("TTS fetch failed or rejected");
 
     const result = await response.json();
     const pcmBase64 = result.candidates[0].content.parts[0].inlineData.data;
@@ -218,7 +246,9 @@ const App = () => {
       const url = await fetchTTS(fullText, true);
       audioCacheRef.current[index] = url;
 
-      // Tải trước audio đọc đáp án đúng
+      // Cố tình delay 1 chút trước khi tải đáp án để tránh dồn Request (Tránh 429 Error)
+      await new Promise(res => setTimeout(res, 1000));
+
       const correctAns = qData[index].answer.trim().toUpperCase();
       const correctText = qData[index][correctAns.toLowerCase()];
       const lang = detectLang(qData[index].question);
@@ -228,7 +258,9 @@ const App = () => {
       const revealUrl = await fetchTTS(revealText, false);
       audioCacheRef.current[`reveal_${index}`] = revealUrl;
     } catch (e) {
-      console.error(`Failed to preload question ${index}`, e);
+      console.warn(`[Fallback Mode] Preload skipped for question ${index}`, e);
+      audioCacheRef.current[index] = 'FALLBACK';
+      audioCacheRef.current[`reveal_${index}`] = 'FALLBACK';
     }
   };
 
@@ -237,52 +269,69 @@ const App = () => {
     setIsSpeaking(true);
     setHasRead(false);
     
+    const fullText = getFullQuestionText(questions[index]);
+    const lang = detectLang(questions[index].question);
+
+    const useFallback = () => {
+      fallbackSpeak(fullText, lang, () => {
+        setIsSpeaking(false);
+        setHasRead(true);
+        preloadQuestion(index + 1, questions);
+      });
+    };
+
     try {
       let url = audioCacheRef.current[index];
+      if (url === 'FALLBACK') throw new Error("Triggered Fallback Flag");
+      
       if (!url) {
-        // Fallback nếu preload chưa kịp xong
-        const fullText = getFullQuestionText(questions[index]);
         url = await fetchTTS(fullText, true);
         audioCacheRef.current[index] = url;
       }
       
       if (audioRef.current) {
         audioRef.current.src = url;
-        audioRef.current.play();
         audioRef.current.onended = () => {
           setIsSpeaking(false);
           setHasRead(true);
+          preloadQuestion(index + 1, questions);
         };
+        audioRef.current.onerror = useFallback;
+        audioRef.current.play().catch(useFallback);
+      } else {
+        useFallback();
       }
-      
-      // Kích hoạt preload cho câu hỏi TIẾP THEO ngay trong nền
-      preloadQuestion(index + 1, questions);
     } catch (err) {
-      console.error("TTS Play Error:", err);
-      setIsSpeaking(false);
-      setHasRead(true); 
+      console.warn("Using offline fallback voice due to API Error.");
+      useFallback();
     }
   };
 
   const playMessageAudio = async (text) => {
     if (isSpeaking) return;
     setIsSpeaking(true);
+    const lang = detectLang(text);
     
+    const useFallback = () => {
+      fallbackSpeak(text, lang, () => setIsSpeaking(false));
+    };
+
     try {
       const url = await fetchTTS(text, false);
       if (audioRef.current) {
         audioRef.current.src = url;
-        audioRef.current.play();
         audioRef.current.onended = () => setIsSpeaking(false);
+        audioRef.current.onerror = useFallback;
+        audioRef.current.play().catch(useFallback);
+      } else {
+        useFallback();
       }
     } catch (err) {
-      console.error("TTS Play Error:", err);
-      setIsSpeaking(false);
+      useFallback();
     }
   };
 
   const loadQuestions = async () => {
-    // Mở khóa AudioContext ngay khi người dùng tương tác (rất quan trọng cho iOS/Safari)
     try {
       const ctx = getAudioCtx();
       if (ctx.state === 'suspended') await ctx.resume();
@@ -306,27 +355,23 @@ const App = () => {
       let data = parseCSV(text);
       if (data.length === 0) throw new Error("File CSV trống.");
       
-      // Xáo trộn ngẫu nhiên thứ tự câu hỏi (Fisher-Yates Shuffle)
       for (let i = data.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [data[i], data[j]] = [data[j], data[i]];
       }
 
-      // Xáo trộn ngẫu nhiên thứ tự đáp án A, B, C trong mỗi câu hỏi
       data = data.map(q => {
         const origAns = (q.answer || '').trim().toLowerCase();
-        if (!['a', 'b', 'c'].includes(origAns)) return q; // Bỏ qua nếu format đáp án không chuẩn
+        if (!['a', 'b', 'c'].includes(origAns)) return q; 
 
-        const correctText = q[origAns]; // Lưu lại nội dung của đáp án đúng
+        const correctText = q[origAns]; 
         let options = [q.a, q.b, q.c];
 
-        // Shuffle thứ tự 3 đáp án
         for (let i = options.length - 1; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [options[i], options[j]] = [options[j], options[i]];
         }
 
-        // Tìm xem nội dung đáp án đúng giờ đang nằm ở index nào (0=A, 1=B, 2=C)
         const newCorrectIdx = options.indexOf(correctText);
         const newAnswer = ['A', 'B', 'C'][newCorrectIdx];
 
@@ -335,11 +380,10 @@ const App = () => {
           a: options[0],
           b: options[1],
           c: options[2],
-          answer: newAnswer // Cập nhật lại key đáp án đúng
+          answer: newAnswer 
         };
       });
 
-      // Xóa cache cũ và Preload câu hỏi số 0 trước khi bắt đầu
       audioCacheRef.current = {};
       await preloadQuestion(0, data);
 
@@ -376,7 +420,6 @@ const App = () => {
     }
   }, [currentIdx, gameState]);
 
-  // Đọc thông báo kết thúc game
   useEffect(() => {
     if (gameState === 'gameover' || gameState === 'win') {
       const nameToRead = playerName.trim() || 'bạn';
@@ -391,57 +434,66 @@ const App = () => {
   const handleAnswer = async (choice) => {
     if (isRevealing) return;
     
-    // Stop audio if user answers early
     if (audioRef.current) {
       audioRef.current.pause();
       setIsSpeaking(false);
+    }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
     }
 
     clearTimeout(timerRef.current);
     setSelectedChoice(choice);
     setIsRevealing(true);
     
-    // Time out scenario (choice is null)
     const correct = questions[currentIdx].answer.trim().toUpperCase();
     let isCorrect = false;
     if (choice !== null) {
       isCorrect = choice === correct;
     }
 
-    // Play SFX
     if (isCorrect) {
       SoundEngine.playApplause();
     } else {
       SoundEngine.playWrong();
     }
 
-    // Đọc đáp án đúng
     setIsSpeaking(true);
     let revealUrl = audioCacheRef.current[`reveal_${currentIdx}`];
-    if (!revealUrl) {
-      const correctText = questions[currentIdx][correct.toLowerCase()];
-      const lang = detectLang(questions[currentIdx].question);
-      const revealText = lang === 'en'
-        ? `The correct answer is ${correct}, ${correctText}`
-        : `Đáp án đúng là ${correct}, ${correctText}`;
-      try {
+    const correctText = questions[currentIdx][correct.toLowerCase()];
+    const lang = detectLang(questions[currentIdx].question);
+    const revealText = lang === 'en'
+      ? `The correct answer is ${correct}, ${correctText}`
+      : `Đáp án đúng là ${correct}, ${correctText}`;
+
+    const playRevealFallback = async () => {
+      return new Promise(resolve => {
+        fallbackSpeak(revealText, lang, resolve);
+      });
+    };
+
+    try {
+      if (revealUrl === 'FALLBACK') throw new Error("Fallback cached");
+      if (!revealUrl) {
         revealUrl = await fetchTTS(revealText, false);
-      } catch (e) {}
+      }
+
+      if (revealUrl && audioRef.current) {
+        await new Promise(resolve => {
+          audioRef.current.src = revealUrl;
+          audioRef.current.onended = resolve;
+          audioRef.current.onerror = resolve; // Tiếp tục tiến trình nếu play lỗi
+          audioRef.current.play().catch(resolve);
+        });
+      } else {
+        await playRevealFallback();
+      }
+    } catch (e) {
+      await playRevealFallback();
     }
 
-    if (revealUrl && audioRef.current) {
-      await new Promise(resolve => {
-        audioRef.current.src = revealUrl;
-        audioRef.current.onended = resolve;
-        audioRef.current.play().catch(resolve);
-      });
-    } else {
-      // Fallback nếu lỗi mạng/TTS
-      await new Promise(res => setTimeout(res, 2500));
-    }
     setIsSpeaking(false);
 
-    // Nghỉ thêm 0.5s cho mượt sau khi đọc xong
     await new Promise(res => setTimeout(res, 500));
 
     setIsRevealing(false);
@@ -465,6 +517,9 @@ const App = () => {
     if (audioRef.current) {
       audioRef.current.pause();
     }
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
     setIsSpeaking(false);
     setGameState('config');
     setQuestions([]);
@@ -476,7 +531,6 @@ const App = () => {
     setHasRead(false);
   };
 
-  // Helper function to get choice styles
   const getChoiceStyle = (label) => {
     const correct = questions[currentIdx]?.answer.trim().toUpperCase();
     if (!isRevealing) {
@@ -528,7 +582,7 @@ const App = () => {
               <h2 className="text-xl font-bold">Cấu hình ván chơi</h2>
               
               <div className="text-left space-y-2">
-                <label className="text-sm font-semibold text-slate-500 ml-1">Tên người chơi (AI sẽ đọc tên này)</label>
+                <label className="text-sm font-semibold text-slate-500 ml-1">Tên người chơi</label>
                 <input 
                   type="text" 
                   value={playerName}
@@ -573,7 +627,6 @@ const App = () => {
           {gameState === 'playing' && (
             <div className="space-y-8">
               
-              {/* Timer & Status */}
               <div className="space-y-2">
                 <div className="flex justify-between items-end px-1">
                    <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
@@ -591,7 +644,6 @@ const App = () => {
                 </div>
               </div>
 
-              {/* Question */}
               <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100 relative">
                 <div className="flex items-start justify-between gap-4">
                   <h3 className="text-xl sm:text-2xl font-bold leading-tight">
@@ -608,7 +660,6 @@ const App = () => {
                 </div>
               </div>
 
-              {/* Options */}
               <div className="grid gap-3 sm:gap-4">
                 {['A', 'B', 'C'].map((label) => {
                   const correct = questions[currentIdx]?.answer.trim().toUpperCase();
