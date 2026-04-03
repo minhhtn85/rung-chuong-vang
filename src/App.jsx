@@ -128,8 +128,19 @@ const fallbackSpeak = (text, lang, onEnd) => {
   window.speechSynthesis.cancel(); 
   
   const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = lang === 'en' ? 'en-US' : 'vi-VN';
+  const targetLang = lang === 'en' ? 'en-US' : 'vi-VN';
+  utterance.lang = targetLang;
   utterance.rate = 1.0;
+  
+  // Fix cho thiết bị dùng ngôn ngữ Tiếng Anh: Ép trình duyệt tìm và chọn đúng giọng Tiếng Việt
+  const voices = window.speechSynthesis.getVoices();
+  if (voices && voices.length > 0) {
+    // Tìm giọng đọc có chứa mã ngôn ngữ tương ứng (vi hoặc en)
+    const voice = voices.find(v => v.lang.toLowerCase().includes(lang === 'en' ? 'en' : 'vi'));
+    if (voice) {
+      utterance.voice = voice;
+    }
+  }
   
   // iOS Safari Fix: Sự kiện onend của Safari rất hay bị tịt (không fire). 
   // Cần một biến cờ và timeout dự phòng để game không bị treo.
@@ -359,6 +370,7 @@ const App = () => {
       
       // Mở khóa SpeechSynthesis cho iOS Safari (Phải có thao tác User Interaction)
       if ('speechSynthesis' in window) {
+        window.speechSynthesis.getVoices(); // Kích hoạt nạp danh sách giọng đọc sớm
         const initSpeech = new SpeechSynthesisUtterance('');
         initSpeech.volume = 0; // Đọc im lặng để xin quyền
         window.speechSynthesis.speak(initSpeech);
