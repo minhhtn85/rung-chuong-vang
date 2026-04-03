@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, RotateCcw, Volume2, AlertCircle, Trophy, Clock, FileText, ChevronRight, CheckCircle2, XCircle } from 'lucide-react';
 
-// ĐỂ TRỐNG Ở ĐÂY KHI CHẠY TRÊN CANVAS. 
-// LƯU Ý BẢO MẬT: Khi deploy lên Vercel, TUYỆT ĐỐI KHÔNG commit key thẳng vào file này lên Github.
-const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
+// Chú ý: Đặt apiKey = "" để chạy trong môi trường xem trước (Canvas).
+// Khi deploy lên Vercel, anh hãy thay dòng này bằng:
+// const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
+const apiKey = ""; 
 
 // --- UTILS: CSV Parser ---
 const parseCSV = (text) => {
@@ -50,7 +51,7 @@ const detectLang = (text) => {
   return viRegex.test(text) ? 'vi' : 'en';
 };
 
-// --- UTILS: Sound Engine (Web Audio API & HTML Audio) ---
+// --- UTILS: Sound Engine ---
 let audioCtx = null;
 const getAudioCtx = () => {
   if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -67,7 +68,7 @@ const SoundEngine = {
       osc.type = 'square';
       osc.frequency.setValueAtTime(1000, ctx.currentTime);
       osc.frequency.exponentialRampToValueAtTime(10, ctx.currentTime + 0.05);
-      gain.gain.setValueAtTime(0.02, ctx.currentTime);
+      gain.gain.setValueAtTime(0.01, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.05);
       osc.connect(gain);
       gain.connect(ctx.destination);
@@ -83,15 +84,15 @@ const SoundEngine = {
         const gain = ctx.createGain();
         osc.type = 'sine';
         osc.frequency.setValueAtTime(freq, ctx.currentTime + delay);
-        gain.gain.setValueAtTime(0.2, ctx.currentTime + delay);
+        gain.gain.setValueAtTime(0.1, ctx.currentTime + delay);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + delay + 0.4);
         osc.connect(gain);
         gain.connect(ctx.destination);
         osc.start(ctx.currentTime + delay);
         osc.stop(ctx.currentTime + delay + 0.4);
       };
-      playNote(1046.50, 0); // C6
-      playNote(1318.51, 0.15); // E6
+      playNote(1046.50, 0); 
+      playNote(1318.51, 0.15); 
     } catch(e) {}
   },
   playWrong: () => {
@@ -102,7 +103,7 @@ const SoundEngine = {
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(200, ctx.currentTime);
       osc.frequency.exponentialRampToValueAtTime(80, ctx.currentTime + 0.5);
-      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.setValueAtTime(0.05, ctx.currentTime);
       gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.5);
       osc.connect(gain);
       gain.connect(ctx.destination);
@@ -112,8 +113,8 @@ const SoundEngine = {
   },
   playApplause: () => {
     const audio = new Audio('https://actions.google.com/sounds/v1/crowds/light_applause.ogg');
-    audio.volume = 0.5;
-    audio.play().catch(e => console.log('Audio play failed', e));
+    audio.volume = 0.4;
+    audio.play().catch(e => console.log('Audio play blocked', e));
   }
 };
 
@@ -124,7 +125,6 @@ const fallbackSpeak = (text, lang, onEnd) => {
     return;
   }
   
-  // Hủy các luồng đang đọc để tránh kẹt
   window.speechSynthesis.cancel(); 
   
   const utterance = new SpeechSynthesisUtterance(text);
@@ -132,18 +132,12 @@ const fallbackSpeak = (text, lang, onEnd) => {
   utterance.lang = targetLang;
   utterance.rate = 1.0;
   
-  // Fix cho thiết bị dùng ngôn ngữ Tiếng Anh: Ép trình duyệt tìm và chọn đúng giọng Tiếng Việt
   const voices = window.speechSynthesis.getVoices();
-  if (voices && voices.length > 0) {
-    // Tìm giọng đọc có chứa mã ngôn ngữ tương ứng (vi hoặc en)
-    const voice = voices.find(v => v.lang.toLowerCase().includes(lang === 'en' ? 'en' : 'vi'));
-    if (voice) {
-      utterance.voice = voice;
-    }
+  if (voices.length > 0) {
+    const targetVoice = voices.find(v => v.lang.toLowerCase().includes(lang === 'en' ? 'en' : 'vi'));
+    if (targetVoice) utterance.voice = targetVoice;
   }
   
-  // iOS Safari Fix: Sự kiện onend của Safari rất hay bị tịt (không fire). 
-  // Cần một biến cờ và timeout dự phòng để game không bị treo.
   let isEnded = false;
   const safeEnd = () => {
     if (isEnded) return;
@@ -156,18 +150,12 @@ const fallbackSpeak = (text, lang, onEnd) => {
   
   window.speechSynthesis.speak(utterance);
 
-  // Set timeout dự phòng. Ước tính thời gian đọc: 150ms/ký tự + 2 giây an toàn
-  const estimatedTime = text.length * 150 + 2000;
-  setTimeout(() => {
-    if (!isEnded) {
-      console.warn("Fallback iOS Safari timeout triggered (onend failed to fire)");
-      safeEnd();
-    }
-  }, estimatedTime);
+  const estimatedTime = text.length * 150 + 2500;
+  setTimeout(safeEnd, estimatedTime);
 };
 
 const App = () => {
-  const [gameState, setGameState] = useState('config'); // config, loading, playing, gameover, win
+  const [gameState, setGameState] = useState('config'); 
   const [questions, setQuestions] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [score, setScore] = useState(0);
@@ -176,7 +164,6 @@ const App = () => {
   const [error, setError] = useState(null);
   const [playerName, setPlayerName] = useState('Mỹ An'); 
   
-  // New States for logic updates
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [hasRead, setHasRead] = useState(false);
   const [selectedChoice, setSelectedChoice] = useState(null);
@@ -186,7 +173,6 @@ const App = () => {
   const audioRef = useRef(null);
   const audioCacheRef = useRef({}); 
 
-  // Helper để lấy chuỗi đọc bao gồm cả đáp án
   const getFullQuestionText = (q) => {
     if (!q) return "";
     const lang = detectLang(q.question);
@@ -197,59 +183,32 @@ const App = () => {
     }
   };
 
-  // Hàm tải TTS độc lập, trả về URL của file audio
   const fetchTTS = async (text, isQuestion = true) => {
+    // Trong môi trường Canvas, key sẽ được inject ngầm nếu apiKey = ""
     const lang = detectLang(text);
     const voiceName = lang === 'en' ? "Kore" : "Aoede";
-    
-    let prompt = "";
-    if (isQuestion) {
-      if (lang === 'en') {
-        prompt = `Speak in an American female voice: ${text}. I will read it again. ${text}. 10 seconds to answer starts now.`;
-      } else {
-        prompt = `Nói bằng giọng nữ chuẩn miền Bắc: ${text}. Cô đọc lại lần nữa. ${text}. 10 giây để trả lời bắt đầu.`;
-      }
-    } else {
-      if (lang === 'en') {
-        prompt = `Speak cheerfully in an American female voice: ${text}`;
-      } else {
-        prompt = `Nói vui tươi bằng giọng nữ chuẩn miền Bắc: ${text}`;
-      }
-    }
+    const prompt = isQuestion
+      ? (lang === 'en' 
+          ? `Speak in an American female voice: ${text}. I will read it again. ${text}. 10 seconds to answer starts now.`
+          : `Nói bằng giọng nữ chuẩn miền Bắc: ${text}. Cô đọc lại lần nữa. ${text}. 10 giây để trả lời bắt đầu.`)
+      : (lang === 'en' 
+          ? `Speak cheerfully: ${text}` 
+          : `Nói vui tươi: ${text}`);
 
-    let retryCount = 0;
-    const maxRetries = 3; 
-    let response;
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseModalities: ["AUDIO"],
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
+        },
+        model: "gemini-2.5-flash-preview-tts"
+      })
+    });
 
-    while (retryCount < maxRetries) {
-      try {
-        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              responseModalities: ["AUDIO"],
-              speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
-            },
-            model: "gemini-2.5-flash-preview-tts"
-          })
-        });
-        if (response.ok) break;
-        const errText = await response.text();
-        console.error("API Error Details:", errText);
-        if (response.status === 403 || response.status === 429) {
-          throw new Error(`API quota/permission error: ${response.status}`);
-        }
-      } catch (e) {
-        console.error("Network/Fetch Error:", e);
-        if (e.message && e.message.includes("quota/permission")) throw e; 
-      }
-      retryCount++;
-      await new Promise(res => setTimeout(res, Math.pow(2, retryCount) * 1000));
-    }
-
-    if (!response || !response.ok) throw new Error("TTS fetch failed or rejected");
+    if (!response.ok) throw new Error("TTS fetch failed");
 
     const result = await response.json();
     const pcmBase64 = result.candidates[0].content.parts[0].inlineData.data;
@@ -268,17 +227,15 @@ const App = () => {
     return URL.createObjectURL(blob);
   };
 
-  // Tải trước audio cho một câu hỏi
   const preloadQuestion = async (index, qData) => {
-    if (!qData || index >= qData.length) return;
-    if (audioCacheRef.current[index]) return; 
+    if (!qData || index >= qData.length || audioCacheRef.current[index]) return; 
     
     try {
       const fullText = getFullQuestionText(qData[index]);
       const url = await fetchTTS(fullText, true);
       audioCacheRef.current[index] = url;
 
-      await new Promise(res => setTimeout(res, 1000));
+      await new Promise(res => setTimeout(res, 800));
 
       const correctAns = qData[index].answer.trim().toUpperCase();
       const correctText = qData[index][correctAns.toLowerCase()];
@@ -289,9 +246,8 @@ const App = () => {
       const revealUrl = await fetchTTS(revealText, false);
       audioCacheRef.current[`reveal_${index}`] = revealUrl;
     } catch (e) {
-      console.warn(`[Fallback Mode] Preload skipped for question ${index}`, e);
+      console.warn(`Preload skipped for ${index}`, e);
       audioCacheRef.current[index] = 'FALLBACK';
-      audioCacheRef.current[`reveal_${index}`] = 'FALLBACK';
     }
   };
 
@@ -303,7 +259,7 @@ const App = () => {
     const fullText = getFullQuestionText(questions[index]);
     const lang = detectLang(questions[index].question);
 
-    const useFallback = () => {
+    const runFallback = () => {
       fallbackSpeak(fullText, lang, () => {
         setIsSpeaking(false);
         setHasRead(true);
@@ -313,9 +269,7 @@ const App = () => {
 
     try {
       let url = audioCacheRef.current[index];
-      if (url === 'FALLBACK') throw new Error("Triggered Fallback Flag");
-      
-      if (!url) {
+      if (!url || url === 'FALLBACK') {
         url = await fetchTTS(fullText, true);
         audioCacheRef.current[index] = url;
       }
@@ -327,14 +281,13 @@ const App = () => {
           setHasRead(true);
           preloadQuestion(index + 1, questions);
         };
-        audioRef.current.onerror = useFallback;
-        audioRef.current.play().catch(useFallback);
+        audioRef.current.onerror = runFallback;
+        audioRef.current.play().catch(runFallback);
       } else {
-        useFallback();
+        runFallback();
       }
     } catch (err) {
-      console.warn("Using offline fallback voice due to API Error.");
-      useFallback();
+      runFallback();
     }
   };
 
@@ -342,43 +295,36 @@ const App = () => {
     if (isSpeaking) return;
     setIsSpeaking(true);
     const lang = detectLang(text);
-    
-    const useFallback = () => {
-      fallbackSpeak(text, lang, () => setIsSpeaking(false));
-    };
+    const runFallback = () => fallbackSpeak(text, lang, () => setIsSpeaking(false));
 
     try {
       const url = await fetchTTS(text, false);
       if (audioRef.current) {
         audioRef.current.src = url;
         audioRef.current.onended = () => setIsSpeaking(false);
-        audioRef.current.onerror = useFallback;
-        audioRef.current.play().catch(useFallback);
+        audioRef.current.onerror = runFallback;
+        audioRef.current.play().catch(runFallback);
       } else {
-        useFallback();
+        runFallback();
       }
     } catch (err) {
-      useFallback();
+      runFallback();
     }
   };
 
   const loadQuestions = async () => {
     try {
-      // Mở khóa Audio API truyền thống
-      const ctx = getAudioCtx();
-      if (ctx.state === 'suspended') await ctx.resume();
-      
-      // Mở khóa SpeechSynthesis cho iOS Safari (Phải có thao tác User Interaction)
+      getAudioCtx();
       if ('speechSynthesis' in window) {
-        window.speechSynthesis.getVoices(); // Kích hoạt nạp danh sách giọng đọc sớm
-        const initSpeech = new SpeechSynthesisUtterance('');
-        initSpeech.volume = 0; // Đọc im lặng để xin quyền
-        window.speechSynthesis.speak(initSpeech);
+        window.speechSynthesis.cancel();
+        const init = new SpeechSynthesisUtterance('.');
+        init.volume = 0;
+        window.speechSynthesis.speak(init);
       }
     } catch(e) {}
 
     if (!csvUrl) {
-      setError("Vui lòng nhập link CSV từ Google Drive.");
+      setError("Vui lòng nhập link CSV.");
       return;
     }
     setGameState('loading');
@@ -390,10 +336,10 @@ const App = () => {
         if (idMatch) fetchUrl = `https://docs.google.com/spreadsheets/d/${idMatch[1]}/export?format=csv`;
       }
       const response = await fetch(fetchUrl);
-      if (!response.ok) throw new Error("Không thể tải file. Hãy đảm bảo file công khai.");
+      if (!response.ok) throw new Error("File không công khai.");
       const text = await response.text();
       let data = parseCSV(text);
-      if (data.length === 0) throw new Error("File CSV trống.");
+      if (data.length === 0) throw new Error("CSV trống.");
       
       for (let i = data.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -402,31 +348,20 @@ const App = () => {
 
       data = data.map(q => {
         const origAns = (q.answer || '').trim().toLowerCase();
-        if (!['a', 'b', 'c'].includes(origAns)) return q; 
-
         const correctText = q[origAns]; 
         let options = [q.a, q.b, q.c];
-
-        for (let i = options.length - 1; i > 0; i--) {
+        for (let i = 2; i > 0; i--) {
           const j = Math.floor(Math.random() * (i + 1));
           [options[i], options[j]] = [options[j], options[i]];
         }
-
-        const newCorrectIdx = options.indexOf(correctText);
-        const newAnswer = ['A', 'B', 'C'][newCorrectIdx];
-
         return {
-          ...q,
-          a: options[0],
-          b: options[1],
-          c: options[2],
-          answer: newAnswer 
+          ...q, a: options[0], b: options[1], c: options[2],
+          answer: ['A', 'B', 'C'][options.indexOf(correctText)]
         };
       });
 
       audioCacheRef.current = {};
       await preloadQuestion(0, data);
-
       setQuestions(data);
       setGameState('playing');
       setCurrentIdx(0);
@@ -446,7 +381,7 @@ const App = () => {
           SoundEngine.playTick();
           setTimeLeft(prev => prev - 1);
         }, 1000);
-      } else if (timeLeft === 0) {
+      } else {
         SoundEngine.playTing();
         handleAnswer(null); 
       }
@@ -462,90 +397,64 @@ const App = () => {
 
   useEffect(() => {
     if (gameState === 'gameover' || gameState === 'win') {
-      const nameToRead = playerName.trim() || 'bạn';
-      let finalMessage = `Chúc mừng ${nameToRead}, bạn đã đạt được ${score} điểm.`;
-      if (gameState === 'gameover') {
-        finalMessage += ` ${nameToRead} cố gắng hơn lần sau nhé.`;
-      }
-      playMessageAudio(finalMessage);
+      const name = playerName.trim() || 'bạn';
+      let msg = `Chúc mừng ${name}, bạn đã đạt được ${score} điểm.`;
+      if (gameState === 'gameover') msg += ` ${name} cố gắng hơn lần sau nhé.`;
+      playMessageAudio(msg);
     }
   }, [gameState, score, playerName]);
 
   const handleAnswer = async (choice) => {
     if (isRevealing) return;
-    
-    if (audioRef.current) {
-      audioRef.current.pause();
-      setIsSpeaking(false);
-    }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
-
+    if (audioRef.current) audioRef.current.pause();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     clearTimeout(timerRef.current);
     setSelectedChoice(choice);
     setIsRevealing(true);
     
     const correct = questions[currentIdx].answer.trim().toUpperCase();
-    let isCorrect = false;
-    if (choice !== null) {
-      isCorrect = choice === correct;
-    }
-
-    if (isCorrect) {
-      SoundEngine.playApplause();
-    } else {
-      SoundEngine.playWrong();
-    }
+    const isCorrect = choice === correct;
+    isCorrect ? SoundEngine.playApplause() : SoundEngine.playWrong();
 
     setIsSpeaking(true);
-    let revealUrl = audioCacheRef.current[`reveal_${currentIdx}`];
     const correctText = questions[currentIdx][correct.toLowerCase()];
     const lang = detectLang(questions[currentIdx].question);
-    const revealText = lang === 'en'
-      ? `The correct answer is ${correct}, ${correctText}`
-      : `Đáp án đúng là ${correct}, ${correctText}`;
-
-    const playRevealFallback = async () => {
-      return new Promise(resolve => {
-        fallbackSpeak(revealText, lang, resolve);
-      });
-    };
+    const revealText = lang === 'en' ? `Correct answer is ${correct}, ${correctText}` : `Đáp án đúng là ${correct}, ${correctText}`;
+    
+    const runRevealFallback = () => new Promise(res => fallbackSpeak(revealText, lang, res));
 
     try {
-      if (revealUrl === 'FALLBACK') throw new Error("Fallback cached");
-      if (!revealUrl) {
-        revealUrl = await fetchTTS(revealText, false);
+      let url = audioCacheRef.current[`reveal_${currentIdx}`];
+      if (!url || url === 'FALLBACK') {
+        url = await fetchTTS(revealText, false);
       }
-
-      if (revealUrl && audioRef.current) {
-        await new Promise(resolve => {
-          audioRef.current.src = revealUrl;
-          audioRef.current.onended = resolve;
-          audioRef.current.onerror = resolve; 
-          audioRef.current.play().catch(resolve);
+      if (url && audioRef.current) {
+        await new Promise(res => {
+          audioRef.current.src = url;
+          audioRef.current.onended = res;
+          audioRef.current.onerror = res;
+          audioRef.current.play().catch(res);
         });
       } else {
-        await playRevealFallback();
+        await runRevealFallback();
       }
     } catch (e) {
       await playRevealFallback();
     }
 
     setIsSpeaking(false);
-
     await new Promise(res => setTimeout(res, 500));
-
     setIsRevealing(false);
     setSelectedChoice(null);
     setHasRead(false);
 
     if (isCorrect) {
-      setScore(prev => prev + 1);
       if (currentIdx + 1 < questions.length) {
-        setCurrentIdx(prev => prev + 1);
+        setScore(s => s + 1);
+        setCurrentIdx(i => i + 1);
         setTimeLeft(10);
       } else {
+        setScore(s => s + 1);
         setGameState('win');
       }
     } else {
@@ -554,12 +463,8 @@ const App = () => {
   };
 
   const resetGame = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-    }
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-    }
+    if (audioRef.current) audioRef.current.pause();
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     setIsSpeaking(false);
     setGameState('config');
     setQuestions([]);
@@ -572,201 +477,66 @@ const App = () => {
   };
 
   const getChoiceStyle = (label) => {
-    const correct = questions[currentIdx]?.answer.trim().toUpperCase();
-    if (!isRevealing) {
-      return "border-slate-100 bg-white md:hover:border-amber-400 md:hover:bg-amber-50 active:bg-amber-50";
-    }
-    
-    if (label === correct) {
-      return "border-green-500 bg-green-50 ring-2 ring-green-200";
-    }
-    if (selectedChoice === label && label !== correct) {
-      return "border-red-500 bg-red-50 ring-2 ring-red-200";
-    }
-    return "opacity-50 border-slate-100 bg-white";
+    const correct = questions[currentIdx]?.answer;
+    if (!isRevealing) return "border-slate-100 bg-white active:bg-amber-50";
+    if (label === correct) return "border-green-500 bg-green-50 ring-2 ring-green-200";
+    if (selectedChoice === label) return "border-red-500 bg-red-50 ring-2 ring-red-200";
+    return "opacity-50 border-slate-100";
   };
 
   return (
-    <div className="min-h-[100dvh] bg-amber-50 flex items-center justify-center p-2 sm:p-4 font-sans text-slate-800 selection:bg-amber-200">
+    <div className="min-h-[100dvh] bg-amber-50 flex items-center justify-center p-2 font-sans text-slate-800">
       <audio ref={audioRef} hidden playsInline />
-      
       <div className="max-w-2xl w-full bg-white rounded-3xl shadow-2xl overflow-hidden border-4 border-amber-400">
-        
-        {/* Header Section */}
-        <div className="bg-amber-400 p-6 flex justify-between items-center">
+        <div className="bg-amber-400 p-6 flex justify-between items-center text-white">
           <div className="flex items-center gap-3">
-            <div className="bg-white p-2 rounded-full shadow-inner">
-              <Trophy className="text-amber-500 w-8 h-8" />
-            </div>
-            <h1 className="text-2xl font-black text-white tracking-tight uppercase">Rung Chuông Vàng</h1>
+            <Trophy className="w-8 h-8" />
+            <h1 className="text-2xl font-black uppercase">Rung Chuông Vàng</h1>
           </div>
-          {gameState === 'playing' && (
-            <div className="flex flex-col items-end">
-              <div className="bg-white/30 px-4 py-0.5 rounded-full text-white text-xs font-bold backdrop-blur-sm mb-1">
-                Câu: {currentIdx + 1}/{questions.length}
-              </div>
-              <div className="bg-white/30 px-4 py-0.5 rounded-full text-white text-xs font-bold backdrop-blur-sm">
-                Điểm: {score}
-              </div>
-            </div>
-          )}
+          {gameState === 'playing' && <div className="text-right text-xs font-bold">Câu: {currentIdx + 1}/{questions.length}<br/>Điểm: {score}</div>}
         </div>
 
-        <div className="p-8">
-          
+        <div className="p-6">
           {gameState === 'config' && (
-            <div className="space-y-6 text-center animate-in fade-in zoom-in duration-300">
-              <div className="w-24 h-24 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <FileText className="text-amber-600 w-12 h-12" />
-              </div>
+            <div className="space-y-6 text-center">
+              <FileText className="mx-auto text-amber-500 w-16 h-16" />
               <h2 className="text-xl font-bold">Cấu hình ván chơi</h2>
-              
-              <div className="text-left space-y-2">
-                <label className="text-sm font-semibold text-slate-500 ml-1">Tên người chơi</label>
-                <input 
-                  type="text" 
-                  value={playerName}
-                  onChange={(e) => setPlayerName(e.target.value)}
-                  placeholder="Ví dụ: Mỹ An"
-                  className="w-full p-4 rounded-xl border-2 border-slate-200 focus:border-amber-400 outline-none transition-all"
-                />
-              </div>
-
-              <div className="text-left space-y-2">
-                <label className="text-sm font-semibold text-slate-500 ml-1">Link Google Drive CSV</label>
-                <input 
-                  type="text" 
-                  value={csvUrl}
-                  onChange={(e) => setCsvUrl(e.target.value)}
-                  placeholder="Dán link file Google Sheet tại đây..."
-                  className="w-full p-4 rounded-xl border-2 border-slate-200 focus:border-amber-400 outline-none transition-all"
-                />
-              </div>
-              {error && (
-                <div className="bg-red-50 text-red-500 p-4 rounded-xl flex items-center gap-3 text-sm border border-red-100">
-                  <AlertCircle size={20} /> {error}
-                </div>
-              )}
-              <button 
-                type="button"
-                onClick={loadQuestions}
-                className="w-full bg-amber-500 hover:bg-amber-600 active:bg-amber-700 active:scale-[0.98] text-white font-bold py-4 rounded-xl shadow-lg transition-all touch-manipulation select-none"
-              >
-                Bắt đầu ngay
-              </button>
+              <input type="text" value={playerName} onChange={e => setPlayerName(e.target.value)} placeholder="Tên bé..." className="w-full p-4 rounded-xl border-2 outline-none focus:border-amber-400" />
+              <input type="text" value={csvUrl} onChange={e => setCsvUrl(e.target.value)} placeholder="Link Google Drive..." className="w-full p-4 rounded-xl border-2 outline-none focus:border-amber-400" />
+              {error && <p className="text-red-500 text-sm italic">{error}</p>}
+              <button onClick={loadQuestions} className="w-full bg-amber-500 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 transition-all">Bắt đầu ngay</button>
             </div>
           )}
 
-          {gameState === 'loading' && (
-            <div className="py-20 text-center space-y-4">
-              <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-amber-500 border-t-transparent"></div>
-              <p className="text-slate-500 font-medium">Đang chuẩn bị câu hỏi...</p>
-            </div>
-          )}
+          {gameState === 'loading' && <div className="py-20 text-center animate-pulse font-bold text-amber-600">Đang chuẩn bị câu hỏi...</div>}
 
           {gameState === 'playing' && (
-            <div className="space-y-8">
-              
-              <div className="space-y-2">
-                <div className="flex justify-between items-end px-1">
-                   <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
-                    {!hasRead ? "Đang đọc câu hỏi..." : (timeLeft <= 3 ? "Sắp hết giờ!" : "Đang tính giờ")}
-                   </span>
-                   <span className={`text-xl font-black ${timeLeft <= 3 ? 'text-red-500 animate-pulse' : 'text-amber-500'}`}>
-                    {timeLeft}s
-                   </span>
-                </div>
-                <div className="relative h-4 bg-slate-100 rounded-full overflow-hidden shadow-inner">
-                  <div 
-                    className={`h-full transition-all duration-1000 ease-linear ${timeLeft <= 3 ? 'bg-red-500' : 'bg-amber-500'}`}
-                    style={{ width: `${(timeLeft / 10) * 100}%` }}
-                  />
-                </div>
+            <div className="space-y-6">
+              <div className="relative h-3 bg-slate-100 rounded-full overflow-hidden">
+                <div className={`h-full transition-all duration-1000 ease-linear ${timeLeft <= 3 ? 'bg-red-500' : 'bg-amber-500'}`} style={{ width: `${(timeLeft / 10) * 100}%` }} />
               </div>
-
-              <div className="space-y-4 bg-slate-50 p-6 rounded-2xl border border-slate-100 relative">
-                <div className="flex items-start justify-between gap-4">
-                  <h3 className="text-xl sm:text-2xl font-bold leading-tight">
-                    {questions[currentIdx]?.question}
-                  </h3>
-                  <button 
-                    type="button"
-                    onClick={() => playQuestionAudio(currentIdx)}
-                    disabled={isSpeaking || isRevealing}
-                    className={`p-3 rounded-full transition-colors flex-shrink-0 touch-manipulation active:scale-90 ${isSpeaking ? 'bg-amber-100 text-amber-400' : 'bg-amber-500 text-white hover:bg-amber-600 shadow-md'}`}
-                  >
-                    <Volume2 size={24} className={isSpeaking ? 'animate-bounce' : ''} />
+              <div className="bg-slate-50 p-6 rounded-2xl border border-slate-100 flex justify-between items-start gap-4">
+                <h3 className="text-xl font-bold leading-tight">{questions[currentIdx]?.question}</h3>
+                <button onClick={() => playQuestionAudio(currentIdx)} disabled={isSpeaking || isRevealing} className={`p-3 rounded-full ${isSpeaking ? 'bg-amber-100 text-amber-400' : 'bg-amber-500 text-white'}`}><Volume2 /></button>
+              </div>
+              <div className="grid gap-3">
+                {['A', 'B', 'C'].map(label => (
+                  <button key={label} disabled={isRevealing || !hasRead} onClick={() => handleAnswer(label)} style={{ WebkitTapHighlightColor: 'transparent' }} className={`w-full p-4 text-left border-2 rounded-2xl transition-all flex items-center gap-4 ${getChoiceStyle(label)}`}>
+                    <span className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${isRevealing && label === questions[currentIdx].answer ? 'bg-green-500 text-white' : 'bg-slate-100 text-slate-500'}`}>{label}</span>
+                    <span className="font-medium">{questions[currentIdx]?.[label.toLowerCase()]}</span>
+                    {isRevealing && label === questions[currentIdx].answer && <CheckCircle2 className="ml-auto text-green-500" />}
                   </button>
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:gap-4">
-                {['A', 'B', 'C'].map((label) => {
-                  const correct = questions[currentIdx]?.answer.trim().toUpperCase();
-                  const isCorrectLabel = label === correct;
-                  const isUserLabel = label === selectedChoice;
-
-                  return (
-                    <button
-                      key={label}
-                      type="button"
-                      disabled={isRevealing || !hasRead}
-                      onClick={() => handleAnswer(label)}
-                      style={{ WebkitTapHighlightColor: 'transparent' }}
-                      className={`group relative w-full p-4 sm:p-5 text-left border-2 rounded-2xl transition-all flex items-center gap-3 sm:gap-4 shadow-sm touch-manipulation select-none active:scale-[0.98] ${getChoiceStyle(label)}`}
-                    >
-                      <span className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center font-bold transition-colors ${
-                        isRevealing && isCorrectLabel ? 'bg-green-500 text-white' : 
-                        isRevealing && isUserLabel && !isCorrectLabel ? 'bg-red-500 text-white' : 
-                        'bg-slate-100 text-slate-500'
-                      }`}>
-                        {label}
-                      </span>
-                      <span className="text-lg font-medium">
-                        {questions[currentIdx]?.[label.toLowerCase()]}
-                      </span>
-                      
-                      {isRevealing && (
-                        <div className="ml-auto">
-                          {isCorrectLabel && <CheckCircle2 className="text-green-500" size={24} />}
-                          {isUserLabel && !isCorrectLabel && <XCircle className="text-red-500" size={24} />}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
+                ))}
               </div>
             </div>
           )}
 
           {(gameState === 'gameover' || gameState === 'win') && (
-            <div className="py-10 text-center space-y-6 animate-in zoom-in duration-300">
-              <div className={`w-32 h-32 mx-auto rounded-full flex items-center justify-center text-6xl shadow-xl ${gameState === 'win' ? 'bg-green-100' : 'bg-red-100'}`}>
-                {gameState === 'win' ? '🎊' : '🔔'}
-              </div>
-              <div>
-                <h2 className="text-3xl font-black mb-2 uppercase">
-                  {gameState === 'win' ? 'Chiến thắng!' : 'Bạn đã dừng lại!'}
-                </h2>
-                <p className="text-slate-500 text-lg">
-                  {gameState === 'win' 
-                    ? 'Bạn là người cuối cùng Rung Chuông Vàng!' 
-                    : 'Rất tiếc, bạn đã trả lời chưa chính xác hoặc quá thời gian.'}
-                </p>
-              </div>
-              <div className="bg-slate-50 rounded-2xl p-6 inline-block min-w-[200px] border border-slate-100 shadow-sm">
-                <div className="text-sm text-slate-400 uppercase font-bold tracking-widest mb-1">Tổng điểm</div>
-                <div className="text-5xl font-black text-amber-500">{score}</div>
-              </div>
-              <div className="pt-4">
-                <button 
-                  type="button"
-                  onClick={resetGame}
-                  className="bg-amber-500 hover:bg-amber-600 active:bg-amber-700 active:scale-[0.98] text-white font-bold px-10 py-4 rounded-2xl shadow-lg transition-all flex items-center gap-2 mx-auto touch-manipulation select-none"
-                >
-                  <RotateCcw size={20} /> Chơi ván mới
-                </button>
-              </div>
+            <div className="py-10 text-center space-y-6">
+              <div className="text-6xl">{gameState === 'win' ? '🎊' : '🔔'}</div>
+              <h2 className="text-3xl font-black uppercase">{gameState === 'win' ? 'Chiến thắng!' : 'Dừng chân rồi!'}</h2>
+              <div className="text-5xl font-black text-amber-500">{score} điểm</div>
+              <button onClick={resetGame} className="bg-amber-500 text-white font-bold px-10 py-4 rounded-2xl shadow-lg active:scale-95 transition-all">Chơi ván mới</button>
             </div>
           )}
         </div>
