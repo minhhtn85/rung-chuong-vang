@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, RotateCcw, Volume2, AlertCircle, Trophy, Clock, FileText, ChevronRight, CheckCircle2, XCircle } from 'lucide-react';
 
-// Chú ý: Đặt apiKey = "" để chạy trong môi trường xem trước (Canvas).
-// Khi deploy lên Vercel, anh hãy thay dòng này bằng:
-// const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
+// CHÚ Ý: ĐỂ TRỐNG Ở ĐÂY KHI CHẠY TRÊN CANVAS. 
+// Khi deploy lên Vercel, anh hãy dùng: const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
 const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 // --- UTILS: CSV Parser ---
@@ -150,7 +149,7 @@ const fallbackSpeak = (text, lang, onEnd) => {
   
   window.speechSynthesis.speak(utterance);
 
-  const estimatedTime = text.length * 150 + 2500;
+  const estimatedTime = text.length * 150 + 3000;
   setTimeout(safeEnd, estimatedTime);
 };
 
@@ -173,24 +172,32 @@ const App = () => {
   const audioRef = useRef(null);
   const audioCacheRef = useRef({}); 
 
-  const getFullQuestionText = (q) => {
+  // Xây dựng nội dung kịch bản đọc đầy đủ (để dùng chung cho cả Gemini và Fallback)
+  const getQuestionScript = (q) => {
     if (!q) return "";
     const lang = detectLang(q.question);
+    const options = lang === 'en' 
+      ? `Option A is: ${q.a}. Option B is: ${q.b}. Option C is: ${q.c}.`
+      : `Đáp án A là: ${q.a}. Đáp án B là: ${q.b}. Đáp án C là: ${q.c}.`;
+    
+    const content = `${q.question}. ${options}`;
+    
     if (lang === 'en') {
-      return `${q.question}. Option A is: ${q.a}. Option B is: ${q.b}. Option C is: ${q.c}.`;
+      return `${content} I will read it again. ${content} 10 seconds to answer starts now.`;
     } else {
-      return `${q.question}. Đáp án A là: ${q.a}. Đáp án B là: ${q.b}. Đáp án C là: ${q.c}.`;
+      return `${content} Cô đọc lại lần nữa. ${content} 10 giây để trả lời bắt đầu.`;
     }
   };
 
   const fetchTTS = async (text, isQuestion = true) => {
-    // Trong môi trường Canvas, key sẽ được inject ngầm nếu apiKey = ""
     const lang = detectLang(text);
     const voiceName = lang === 'en' ? "Kore" : "Aoede";
+    
+    // Prompt của Gemini sẽ chỉ yêu cầu nói đúng văn bản script đã được chuẩn bị
     const prompt = isQuestion
       ? (lang === 'en' 
-          ? `Speak in an American female voice: ${text}. I will read it again. ${text}. 10 seconds to answer starts now.`
-          : `Nói bằng giọng nữ chuẩn miền Bắc: ${text}. Cô đọc lại lần nữa. ${text}. 10 giây để trả lời bắt đầu.`)
+          ? `Speak in an American female voice exactly as follows: ${text}`
+          : `Nói bằng giọng nữ chuẩn miền Bắc chính xác đoạn sau: ${text}`)
       : (lang === 'en' 
           ? `Speak cheerfully: ${text}` 
           : `Nói vui tươi: ${text}`);
@@ -231,8 +238,8 @@ const App = () => {
     if (!qData || index >= qData.length || audioCacheRef.current[index]) return; 
     
     try {
-      const fullText = getFullQuestionText(qData[index]);
-      const url = await fetchTTS(fullText, true);
+      const script = getQuestionScript(qData[index]);
+      const url = await fetchTTS(script, true);
       audioCacheRef.current[index] = url;
 
       await new Promise(res => setTimeout(res, 800));
@@ -248,6 +255,7 @@ const App = () => {
     } catch (e) {
       console.warn(`Preload skipped for ${index}`, e);
       audioCacheRef.current[index] = 'FALLBACK';
+      audioCacheRef.current[`reveal_${index}`] = 'FALLBACK';
     }
   };
 
@@ -256,11 +264,11 @@ const App = () => {
     setIsSpeaking(true);
     setHasRead(false);
     
-    const fullText = getFullQuestionText(questions[index]);
+    const script = getQuestionScript(questions[index]);
     const lang = detectLang(questions[index].question);
 
     const runFallback = () => {
-      fallbackSpeak(fullText, lang, () => {
+      fallbackSpeak(script, lang, () => {
         setIsSpeaking(false);
         setHasRead(true);
         preloadQuestion(index + 1, questions);
@@ -270,11 +278,11 @@ const App = () => {
     try {
       let url = audioCacheRef.current[index];
       if (!url || url === 'FALLBACK') {
-        url = await fetchTTS(fullText, true);
+        url = await fetchTTS(script, true);
         audioCacheRef.current[index] = url;
       }
       
-      if (audioRef.current) {
+      if (audioRef.current && url !== 'FALLBACK') {
         audioRef.current.src = url;
         audioRef.current.onended = () => {
           setIsSpeaking(false);
@@ -317,7 +325,9 @@ const App = () => {
       getAudioCtx();
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
-        const init = new SpeechSynthesisUtterance('.');
+        // Mồi cho iOS nạp voices sớm
+        window.speechSynthesis.getVoices(); 
+        const init = new SpeechSynthesisUtterance(' ');
         init.volume = 0;
         window.speechSynthesis.speak(init);
       }
@@ -424,13 +434,15 @@ const App = () => {
     const runRevealFallback = () => new Promise(res => fallbackSpeak(revealText, lang, res));
 
     try {
-      let url = audioCacheRef.current[`reveal_${currentIdx}`];
-      if (!url || url === 'FALLBACK') {
-        url = await fetchTTS(revealText, false);
+      let revealUrl = audioCacheRef.current[`reveal_${currentIdx}`];
+      if (!revealUrl || revealUrl === 'FALLBACK') {
+        revealUrl = await fetchTTS(revealText, false);
       }
-      if (url && audioRef.current) {
+      
+      if (revealUrl && revealUrl !== 'FALLBACK' && audioRef.current) {
         await new Promise(res => {
-          audioRef.current.src = url;
+          // FIX LỖI TYPO: Phải là revealUrl chứ không phải url
+          audioRef.current.src = revealUrl;
           audioRef.current.onended = res;
           audioRef.current.onerror = res;
           audioRef.current.play().catch(res);
@@ -439,7 +451,7 @@ const App = () => {
         await runRevealFallback();
       }
     } catch (e) {
-      await playRevealFallback();
+      await runRevealFallback();
     }
 
     setIsSpeaking(false);
@@ -449,12 +461,13 @@ const App = () => {
     setHasRead(false);
 
     if (isCorrect) {
+      const nextScore = score + 1;
       if (currentIdx + 1 < questions.length) {
-        setScore(s => s + 1);
+        setScore(nextScore);
         setCurrentIdx(i => i + 1);
         setTimeLeft(10);
       } else {
-        setScore(s => s + 1);
+        setScore(nextScore);
         setGameState('win');
       }
     } else {
