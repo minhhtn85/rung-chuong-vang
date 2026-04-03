@@ -4,7 +4,7 @@ import { Play, RotateCcw, Volume2, AlertCircle, Trophy, Clock, FileText, Chevron
 // Chú ý: Đặt apiKey = "" để chạy trong môi trường xem trước (Canvas).
 // Khi deploy lên Vercel, anh hãy thay dòng này bằng:
 // const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
-const apiKey = ""; 
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 // --- UTILS: CSV Parser ---
 const parseCSV = (text) => {
